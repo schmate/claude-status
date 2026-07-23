@@ -7,7 +7,7 @@ import GObject from 'gi://GObject';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {Extension, gettext as _, pgettext} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const REFRESH_SECONDS = 300;
 const TICK_SECONDS = 1;
@@ -71,6 +71,12 @@ function formatCountdown(resetDate, now) {
     return `${minutes}m`;
 }
 
+function panelLabel(sessionText, weekText) {
+    const sessionAbbr = pgettext('short abbreviation for "session" shown in the top bar', 'S');
+    const weekAbbr = pgettext('short abbreviation for "week" shown in the top bar', 'W');
+    return `${sessionAbbr} ${sessionText} | ${weekAbbr} ${weekText}`;
+}
+
 function parseUsage(output) {
     const sessionMatch = output.match(/Current session:\s*(\d+)%\s*used\s*·\s*resets\s*([^\n]+)/i);
     const weekMatch = output.match(/Current week[^:]*:\s*(\d+)%\s*used\s*·\s*resets\s*([^\n]+)/i);
@@ -114,7 +120,8 @@ class UsageCard extends St.BoxLayout {
         this._barFill.set_width(width);
         this._barFill.set_style(`background-color: ${colorForPercent(pct)};`);
 
-        this._resetLabel.set_text(`Reseta em · ${resetText}`);
+        // TRANSLATORS: %s is a date/time string, e.g. "Jul 23, 7:40pm"
+        this._resetLabel.set_text(_('Resets at · %s').replace('%s', resetText));
     }
 
     setCountdown(text) {
@@ -125,7 +132,7 @@ class UsageCard extends St.BoxLayout {
 const ClaudeIndicator = GObject.registerClass(
 class ClaudeIndicator extends PanelMenu.Button {
     _init(extension) {
-        super._init(0.0, 'Claude Status');
+        super._init(0.0, _('Claude Status'));
 
         this._extension = extension;
         this._lastUpdate = null;
@@ -142,7 +149,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         box.add_child(this._icon);
 
         this._label = new St.Label({
-            text: 'S --% | W --%',
+            text: panelLabel('--%', '--%'),
             y_align: Clutter.ActorAlign.CENTER,
             style_class: 'claude-panel-label',
         });
@@ -197,8 +204,8 @@ class ClaudeIndicator extends PanelMenu.Button {
         const cardsItem = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
         const cardsBox = new St.BoxLayout({style_class: 'claude-cards-box', x_expand: true});
 
-        this._sessionCard = new UsageCard('SESSAO (5h)');
-        this._weekCard = new UsageCard('SEMANA');
+        this._sessionCard = new UsageCard(_('SESSION (5h)'));
+        this._weekCard = new UsageCard(_('WEEK'));
         cardsBox.add_child(this._sessionCard);
         cardsBox.add_child(this._weekCard);
 
@@ -226,7 +233,8 @@ class ClaudeIndicator extends PanelMenu.Button {
 
         if (this.menu.isOpen) {
             const secs = Math.max(0, Math.round((now - this._lastUpdate) / 1000));
-            this._updatedLabel.set_text(`atualizado ha ${secs}s`);
+            // TRANSLATORS: %d is the number of seconds since the last refresh
+            this._updatedLabel.set_text(_('updated %ds ago').replace('%d', secs));
         }
     }
 
@@ -259,7 +267,7 @@ class ClaudeIndicator extends PanelMenu.Button {
                 this._data = parsed;
                 this._lastUpdate = new Date();
 
-                this._label.set_text(`S ${parsed.session.pct}% | W ${parsed.week.pct}%`);
+                this._label.set_text(panelLabel(`${parsed.session.pct}%`, `${parsed.week.pct}%`));
                 this._sessionCard.setData(parsed.session.pct, parsed.session.resetText);
                 this._weekCard.setData(parsed.week.pct, parsed.week.resetText);
                 this._tick();

@@ -1,0 +1,49 @@
+# Claude Status GNOME Shell extension translations
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: claude-status\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-07-23 19:26-0300\n"
+"PO-Revision-Date: 2026-07-23 19:26-0300\n"
+"Last-Translator: Automatically generated\n"
+"Language-Team: none\n"
+"Language: fr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#: extension.js:75
+msgctxt "short abbreviation for \"session\" shown in the top bar"
+msgid "S"
+msgstr "S"
+
+#: extension.js:76
+msgctxt "short abbreviation for \"week\" shown in the top bar"
+msgid "W"
+msgstr "Sem"
+
+#. TRANSLATORS: %s is a date/time string, e.g. "Jul 23, 7:40pm"
+#: extension.js:124
+#, javascript-format
+msgid "Resets at · %s"
+msgstr "Réinitialisation · %s"
+
+#: extension.js:135
+msgid "Claude Status"
+msgstr "État de Claude"
+
+#: extension.js:207
+msgid "SESSION (5h)"
+msgstr "SESSION (5h)"
+
+#: extension.js:208
+msgid "WEEK"
+msgstr "SEMAINE"
+
+#. TRANSLATORS: %d is the number of seconds since the last refresh
+#: extension.js:237
+#, javascript-format
+msgid "updated %ds ago"
+msgstr "mis à jour il y a %ds"
