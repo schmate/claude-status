@@ -1,0 +1,8 @@
+{
+  "uuid": "claude-status@oakz.org",
+  "name": "Claude Status",
+  "description": "Mostra uso da sessao atual e da semana do Claude Code na barra superior do GNOME.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/montanhes/claude-status",
+  "version": 1
+}
