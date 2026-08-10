@@ -80,3 +80,19 @@
     font-weight: bold;
     padding-top: 2px;
 }
+
+.claude-status-box {
+    spacing: 8px;
+    padding: 6px 10px;
+}
+
+.claude-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 5px;
+    background-color: #2ecc71;
+}
+
+.claude-status-label {
+    font-size: 0.9em;
+}

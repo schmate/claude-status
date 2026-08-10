@@ -1,38 +1,46 @@
 # Claude Status
 
-Extensão GNOME Shell que mostra o uso do [Claude Code](https://claude.com/claude-code) (`/usage`) na barra superior: porcentagem da sessão atual (5h) e da semana, com contagem regressiva até o reset.
+GNOME Shell extension showing [Claude Code](https://claude.com/claude-code) usage (`/usage`) in the top bar: current session (5h) and weekly percentage, with countdown to reset.
 
-![Painel](screenshots/panel.png)
+![Panel](screenshots/panel.png)
 
-Clique no painel abre o detalhamento:
+Clicking the panel opens a detailed dropdown, including live [Claude status](https://status.claude.com) (operational / degraded / outage):
 
 ![Dropdown](screenshots/dropdown.png)
 
-## Requisitos
+## Requirements
 
-- GNOME Shell 45 a 50
-- [Claude Code](https://claude.com/claude-code) instalado e autenticado, com o binário `claude` disponível no `PATH` do shell de login (`bash -lc`)
+- GNOME Shell 45 to 50
+- [Claude Code](https://claude.com/claude-code) installed and authenticated, with the `claude` binary available in the login shell `PATH` (`bash -lc`)
+- `curl` available in `PATH` (used to fetch the Claude status page)
 
-## Como funciona
+## How it works
 
-A cada 5 minutos a extensão roda `claude -p "/usage"` em background, faz parse da saída (porcentagem e horário de reset da sessão e da semana) e atualiza o painel. Nenhum dado é enviado a terceiros; tudo roda localmente via o próprio CLI do Claude Code.
+Every 5 minutes the extension runs `claude -p "/usage"` in the background, parses the output (session and weekly percentage plus reset time), and updates the panel. It also polls `status.claude.com` on the same interval and shows a color-coded indicator (green/yellow/orange/red) in the dropdown, linking out to the status page on click.
 
-## Instalação
+If a `/usage` call fails or times out (25s watchdog), it retries with exponential backoff (15s, 30s, 45s... capped at 120s, up to 5 attempts) instead of leaving stale data on screen. No data is sent to third parties; everything runs locally through the Claude Code CLI itself, aside from the status page check.
+
+## Installation
 
 ```bash
 git clone https://github.com/montanhes/claude-status.git ~/.local/share/gnome-shell/extensions/claude-status@oakz.org
 gnome-extensions enable claude-status@oakz.org
 ```
 
-No Wayland, extensões novas só são detectadas após logout/login (o GNOME Shell não recarrega em quente). Depois de logar de novo, rode o `gnome-extensions enable` acima.
+On Wayland, new extensions are only picked up after logout/login (GNOME Shell doesn't hot-reload). After logging back in, run the `gnome-extensions enable` command above.
 
-## Estrutura
+## Localization
 
-- `metadata.json` — metadados da extensão (uuid, versão, compatibilidade)
-- `extension.js` — lógica: painel, parse do `/usage`, dropdown
-- `stylesheet.css` — estilo dos cards do dropdown
-- `icons/` — ícone do painel
+UI strings are translated via gettext. Currently available: English (default), Portuguese (pt_BR), Spanish, French, and German. Translations follow the system locale automatically.
 
-## Licença
+## Structure
+
+- `metadata.json` — extension metadata (uuid, version, shell compatibility)
+- `extension.js` — core logic: panel, `/usage` parsing, dropdown, status.claude.com polling, retry/backoff handling
+- `stylesheet.css` — styling for the dropdown cards and status indicator
+- `icons/` — panel icon
+- `po/` — translation files (`.po`) and template (`.pot`)
+
+## License
 
 MIT

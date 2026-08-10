@@ -12,6 +12,30 @@ import {Extension, gettext as _, pgettext} from 'resource:///org/gnome/shell/ext
 const REFRESH_SECONDS = 300;
 const TICK_SECONDS = 1;
 const BAR_WIDTH = 220;
+const SUBPROCESS_TIMEOUT_SECONDS = 25;
+const RETRY_BASE_SECONDS = 15;
+const RETRY_MAX_SECONDS = 120;
+const MAX_RETRIES = 5;
+
+const STATUS_URL = 'https://status.claude.com/api/v2/status.json';
+const STATUS_PAGE_URL = 'https://status.claude.com';
+
+const STATUS_COLORS = {
+    none: '#2ecc71',
+    minor: '#f1c40f',
+    major: '#e67e22',
+    critical: '#e74c3c',
+};
+
+function statusIndicatorLabel(indicator) {
+    const labels = {
+        none: _('All Systems Operational'),
+        minor: _('Minor Service Disruption'),
+        major: _('Major Service Disruption'),
+        critical: _('Critical Service Disruption'),
+    };
+    return labels[indicator] ?? null;
+}
 
 const MONTHS = {
     jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
@@ -138,6 +162,9 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._lastUpdate = null;
         this._data = null;
         this._refreshing = false;
+        this._retryCount = 0;
+        this._retryTimer = null;
+        this._statusRefreshing = false;
 
         const box = new St.BoxLayout({style_class: 'claude-panel-box'});
 
@@ -159,9 +186,11 @@ class ClaudeIndicator extends PanelMenu.Button {
 
         this._buildMenu();
         this._refresh();
+        this._refreshStatus();
 
         this._refreshTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, REFRESH_SECONDS, () => {
             this._refresh();
+            this._refreshStatus();
             return GLib.SOURCE_CONTINUE;
         });
 
@@ -212,6 +241,28 @@ class ClaudeIndicator extends PanelMenu.Button {
         cardsItem.add_child(cardsBox);
         this.menu.addMenuItem(cardsItem);
 
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._statusItem = new PopupMenu.PopupBaseMenuItem();
+        const statusBox = new St.BoxLayout({style_class: 'claude-status-box', x_expand: true});
+
+        this._statusDot = new St.Widget({style_class: 'claude-status-dot'});
+        statusBox.add_child(this._statusDot);
+
+        this._statusLabel = new St.Label({
+            text: _('Checking status…'),
+            style_class: 'claude-status-label',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        statusBox.add_child(this._statusLabel);
+
+        this._statusItem.add_child(statusBox);
+        this._statusItem.connect('activate', () => {
+            Gio.AppInfo.launch_default_for_uri(STATUS_PAGE_URL, null);
+        });
+        this.menu.addMenuItem(this._statusItem);
+
         this.menu.connect('open-state-changed', (menu, open) => {
             if (open)
                 this._tick();
@@ -243,7 +294,13 @@ class ClaudeIndicator extends PanelMenu.Button {
             return;
         this._refreshing = true;
 
+        if (this._retryTimer) {
+            GLib.source_remove(this._retryTimer);
+            this._retryTimer = null;
+        }
+
         let proc;
+        const cancellable = new Gio.Cancellable();
         try {
             proc = Gio.Subprocess.new(
                 ['/bin/bash', '-lc', 'claude -p "/usage"'],
@@ -251,19 +308,42 @@ class ClaudeIndicator extends PanelMenu.Button {
         } catch (e) {
             logError(e, 'claude-status: falha ao iniciar subprocess');
             this._refreshing = false;
+            this._scheduleRetry();
             return;
         }
 
-        proc.communicate_utf8_async(null, null, (source, res) => {
+        let watchdogFired = false;
+        const watchdogId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT, SUBPROCESS_TIMEOUT_SECONDS, () => {
+                watchdogFired = true;
+                logError(new Error(`claude-status: comando excedeu ${SUBPROCESS_TIMEOUT_SECONDS}s, cancelando`));
+                cancellable.cancel();
+                return GLib.SOURCE_REMOVE;
+            });
+
+        proc.communicate_utf8_async(null, cancellable, (source, res) => {
+            if (!watchdogFired)
+                GLib.source_remove(watchdogId);
             this._refreshing = false;
             try {
-                const [, stdout] = source.communicate_utf8_finish(res);
-                const parsed = parseUsage(stdout ?? '');
-                if (!parsed) {
-                    logError(new Error(`claude-status: saida inesperada: ${stdout}`));
+                const [, stdout, stderr] = source.communicate_utf8_finish(res);
+                const exitStatus = source.get_exit_status();
+
+                if (exitStatus !== 0) {
+                    logError(new Error(
+                        `claude-status: comando saiu com codigo ${exitStatus}. stderr: ${(stderr ?? '').trim()}`));
+                    this._scheduleRetry();
                     return;
                 }
 
+                const parsed = parseUsage(stdout ?? '');
+                if (!parsed) {
+                    logError(new Error(`claude-status: saida inesperada: ${stdout}`));
+                    this._scheduleRetry();
+                    return;
+                }
+
+                this._retryCount = 0;
                 this._data = parsed;
                 this._lastUpdate = new Date();
 
@@ -273,6 +353,59 @@ class ClaudeIndicator extends PanelMenu.Button {
                 this._tick();
             } catch (e) {
                 logError(e, 'claude-status: falha ao ler saida do comando');
+                this._scheduleRetry();
+            }
+        });
+    }
+
+    _scheduleRetry() {
+        if (this._retryCount >= MAX_RETRIES)
+            return;
+
+        this._retryCount += 1;
+        const delay = Math.min(RETRY_BASE_SECONDS * this._retryCount, RETRY_MAX_SECONDS);
+
+        this._retryTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._retryTimer = null;
+            this._refresh();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _refreshStatus() {
+        if (this._statusRefreshing)
+            return;
+        this._statusRefreshing = true;
+
+        let proc;
+        try {
+            proc = Gio.Subprocess.new(
+                ['/bin/bash', '-lc', `curl -s --max-time 10 '${STATUS_URL}'`],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+        } catch (e) {
+            logError(e, 'claude-status: falha ao consultar status.claude.com');
+            this._statusRefreshing = false;
+            return;
+        }
+
+        proc.communicate_utf8_async(null, null, (source, res) => {
+            this._statusRefreshing = false;
+            try {
+                const [, stdout] = source.communicate_utf8_finish(res);
+                if (source.get_exit_status() !== 0)
+                    throw new Error('curl falhou');
+
+                const json = JSON.parse(stdout);
+                const indicator = json.status?.indicator ?? 'none';
+                const description = statusIndicatorLabel(indicator) ?? json.status?.description ?? _('Unknown');
+                const color = STATUS_COLORS[indicator] ?? STATUS_COLORS.none;
+
+                this._statusDot.set_style(`background-color: ${color};`);
+                this._statusLabel.set_text(description);
+            } catch (e) {
+                logError(e, 'claude-status: falha ao ler status.claude.com');
+                this._statusDot.set_style(`background-color: ${STATUS_COLORS.none};`);
+                this._statusLabel.set_text(_('Status unavailable'));
             }
         });
     }
@@ -286,12 +419,17 @@ class ClaudeIndicator extends PanelMenu.Button {
             GLib.source_remove(this._tickTimer);
             this._tickTimer = null;
         }
+        if (this._retryTimer) {
+            GLib.source_remove(this._retryTimer);
+            this._retryTimer = null;
+        }
         super.destroy();
     }
 });
 
 export default class ClaudeStatusExtension extends Extension {
     enable() {
+        this.initTranslations();
         this._indicator = new ClaudeIndicator(this);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }

@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: claude-status\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-07-23 19:26-0300\n"
+"POT-Creation-Date: 2026-08-10 10:59-0300\n"
 "PO-Revision-Date: 2026-07-23 19:26-0300\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -14,36 +14,64 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: extension.js:75
+#: extension.js:32
+msgid "All Systems Operational"
+msgstr "Todos los sistemas operativos"
+
+#: extension.js:33
+msgid "Minor Service Disruption"
+msgstr "Interrupción menor del servicio"
+
+#: extension.js:34
+msgid "Major Service Disruption"
+msgstr "Interrupción importante del servicio"
+
+#: extension.js:35
+msgid "Critical Service Disruption"
+msgstr "Interrupción crítica del servicio"
+
+#: extension.js:99
 msgctxt "short abbreviation for \"session\" shown in the top bar"
 msgid "S"
 msgstr "S"
 
-#: extension.js:76
+#: extension.js:100
 msgctxt "short abbreviation for \"week\" shown in the top bar"
 msgid "W"
 msgstr "Sem"
 
 #. TRANSLATORS: %s is a date/time string, e.g. "Jul 23, 7:40pm"
-#: extension.js:124
+#: extension.js:148
 #, javascript-format
 msgid "Resets at · %s"
 msgstr "Reinicia · %s"
 
-#: extension.js:135
+#: extension.js:159
 msgid "Claude Status"
 msgstr "Estado de Claude"
 
-#: extension.js:207
+#: extension.js:236
 msgid "SESSION (5h)"
 msgstr "SESIÓN (5h)"
 
-#: extension.js:208
+#: extension.js:237
 msgid "WEEK"
 msgstr "SEMANA"
 
+#: extension.js:253
+msgid "Checking status…"
+msgstr "Comprobando estado…"
+
 #. TRANSLATORS: %d is the number of seconds since the last refresh
-#: extension.js:237
+#: extension.js:288
 #, javascript-format
 msgid "updated %ds ago"
 msgstr "actualizado hace %ds"
+
+#: extension.js:400
+msgid "Unknown"
+msgstr "Desconocido"
+
+#: extension.js:408
+msgid "Status unavailable"
+msgstr "Estado no disponible"
