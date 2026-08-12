@@ -12,7 +12,6 @@ Clicking the panel opens a detailed dropdown, including live [Claude status](htt
 
 - GNOME Shell 45 to 50
 - [Claude Code](https://claude.com/claude-code) installed and authenticated, with the `claude` binary available in the login shell `PATH` (`bash -lc`)
-- `curl` available in `PATH` (used to fetch the Claude status page)
 
 ## How it works
 
@@ -28,6 +27,10 @@ gnome-extensions enable claude-status@oakz.org
 ```
 
 On Wayland, new extensions are only picked up after logout/login (GNOME Shell doesn't hot-reload). After logging back in, run the `gnome-extensions enable` command above.
+
+## Packaging (EGO submission)
+
+Run `./pack.sh` to build the `.shell-extension.zip` in `dist/`. It uses `gnome-extensions pack` with explicit `--extra-source`/`--podir`, so the archive only ever contains runtime files (`extension.js`, `metadata.json`, `stylesheet.css`, `icons/`, compiled `locale/*.mo`). Never zip the repo directory directly — that pulls in `.git/`, `.gitignore`, `screenshots/`, and `po/*.po`, which trip EGO-P-005/P-006 in review (checked with `shexli`).
 
 ## Localization
 

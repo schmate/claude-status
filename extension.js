@@ -1,6 +1,7 @@
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import Soup from 'gi://Soup?version=3.0';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 
@@ -164,7 +165,11 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._refreshing = false;
         this._retryCount = 0;
         this._retryTimer = null;
+        this._watchdogId = null;
+        this._cancellable = null;
+        this._destroyed = false;
         this._statusRefreshing = false;
+        this._httpSession = new Soup.Session({timeout: 10});
 
         const box = new St.BoxLayout({style_class: 'claude-panel-box'});
 
@@ -263,7 +268,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         });
         this.menu.addMenuItem(this._statusItem);
 
-        this.menu.connect('open-state-changed', (menu, open) => {
+        this._menuOpenStateId = this.menu.connect('open-state-changed', (menu, open) => {
             if (open)
                 this._tick();
         });
@@ -300,7 +305,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         }
 
         let proc;
-        const cancellable = new Gio.Cancellable();
+        this._cancellable = new Gio.Cancellable();
         try {
             proc = Gio.Subprocess.new(
                 ['/bin/bash', '-lc', 'claude -p "/usage"'],
@@ -308,23 +313,34 @@ class ClaudeIndicator extends PanelMenu.Button {
         } catch (e) {
             logError(e, 'claude-status: falha ao iniciar subprocess');
             this._refreshing = false;
+            this._cancellable = null;
             this._scheduleRetry();
             return;
         }
 
         let watchdogFired = false;
-        const watchdogId = GLib.timeout_add_seconds(
+        if (this._watchdogId) {
+            GLib.source_remove(this._watchdogId);
+            this._watchdogId = null;
+        }
+        this._watchdogId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT, SUBPROCESS_TIMEOUT_SECONDS, () => {
                 watchdogFired = true;
+                this._watchdogId = null;
                 logError(new Error(`claude-status: comando excedeu ${SUBPROCESS_TIMEOUT_SECONDS}s, cancelando`));
-                cancellable.cancel();
+                this._cancellable?.cancel();
                 return GLib.SOURCE_REMOVE;
             });
 
-        proc.communicate_utf8_async(null, cancellable, (source, res) => {
-            if (!watchdogFired)
-                GLib.source_remove(watchdogId);
+        proc.communicate_utf8_async(null, this._cancellable, (source, res) => {
+            if (this._watchdogId && !watchdogFired) {
+                GLib.source_remove(this._watchdogId);
+                this._watchdogId = null;
+            }
             this._refreshing = false;
+            this._cancellable = null;
+            if (this._destroyed)
+                return;
             try {
                 const [, stdout, stderr] = source.communicate_utf8_finish(res);
                 const exitStatus = source.get_exit_status();
@@ -365,6 +381,10 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._retryCount += 1;
         const delay = Math.min(RETRY_BASE_SECONDS * this._retryCount, RETRY_MAX_SECONDS);
 
+        if (this._retryTimer) {
+            GLib.source_remove(this._retryTimer);
+            this._retryTimer = null;
+        }
         this._retryTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, delay, () => {
             this._retryTimer = null;
             this._refresh();
@@ -372,45 +392,43 @@ class ClaudeIndicator extends PanelMenu.Button {
         });
     }
 
-    _refreshStatus() {
+    async _refreshStatus() {
         if (this._statusRefreshing)
             return;
         this._statusRefreshing = true;
 
-        let proc;
         try {
-            proc = Gio.Subprocess.new(
-                ['/bin/bash', '-lc', `curl -s --max-time 10 '${STATUS_URL}'`],
-                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+            const message = Soup.Message.new('GET', STATUS_URL);
+            const bytes = await this._httpSession.send_and_read_async(
+                message, GLib.PRIORITY_DEFAULT, null);
+
+            if (message.get_status() !== Soup.Status.OK)
+                throw new Error(`HTTP ${message.get_status()}`);
+
+            const text = new TextDecoder('utf-8').decode(bytes.get_data());
+            const json = JSON.parse(text);
+            const indicator = json.status?.indicator ?? 'none';
+            const description = statusIndicatorLabel(indicator) ?? json.status?.description ?? _('Unknown');
+            const color = STATUS_COLORS[indicator] ?? STATUS_COLORS.none;
+
+            if (this._destroyed)
+                return;
+            this._statusDot.set_style(`background-color: ${color};`);
+            this._statusLabel.set_text(description);
         } catch (e) {
-            logError(e, 'claude-status: falha ao consultar status.claude.com');
-            this._statusRefreshing = false;
-            return;
-        }
-
-        proc.communicate_utf8_async(null, null, (source, res) => {
-            this._statusRefreshing = false;
-            try {
-                const [, stdout] = source.communicate_utf8_finish(res);
-                if (source.get_exit_status() !== 0)
-                    throw new Error('curl falhou');
-
-                const json = JSON.parse(stdout);
-                const indicator = json.status?.indicator ?? 'none';
-                const description = statusIndicatorLabel(indicator) ?? json.status?.description ?? _('Unknown');
-                const color = STATUS_COLORS[indicator] ?? STATUS_COLORS.none;
-
-                this._statusDot.set_style(`background-color: ${color};`);
-                this._statusLabel.set_text(description);
-            } catch (e) {
-                logError(e, 'claude-status: falha ao ler status.claude.com');
+            if (!this._destroyed) {
+                logError(e, 'claude-status: falha ao consultar status.claude.com');
                 this._statusDot.set_style(`background-color: ${STATUS_COLORS.none};`);
                 this._statusLabel.set_text(_('Status unavailable'));
             }
-        });
+        } finally {
+            this._statusRefreshing = false;
+        }
     }
 
     destroy() {
+        this._destroyed = true;
+
         if (this._refreshTimer) {
             GLib.source_remove(this._refreshTimer);
             this._refreshTimer = null;
@@ -423,13 +441,24 @@ class ClaudeIndicator extends PanelMenu.Button {
             GLib.source_remove(this._retryTimer);
             this._retryTimer = null;
         }
+        if (this._watchdogId) {
+            GLib.source_remove(this._watchdogId);
+            this._watchdogId = null;
+        }
+        if (this._menuOpenStateId) {
+            this.menu.disconnect(this._menuOpenStateId);
+            this._menuOpenStateId = null;
+        }
+
+        this._cancellable?.cancel();
+        this._httpSession?.abort();
+
         super.destroy();
     }
 });
 
 export default class ClaudeStatusExtension extends Extension {
     enable() {
-        this.initTranslations();
         this._indicator = new ClaudeIndicator(this);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
