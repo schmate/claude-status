@@ -34,6 +34,32 @@ const CLAUDE_PATH_DIRS = [
     '/snap/bin',
 ];
 
+// Arguments that hold the CLI to reading usage and nothing else.
+//
+//   --safe-mode              no hooks, MCP servers, plugins, custom commands or CLAUDE.md
+//   --strict-mcp-config      ignore any ambient MCP configuration
+//   --no-session-persistence no transcript written for a five-minute poll
+//   --tools ''               no tools available at all
+//
+// `/usage` is answered locally today, without a model turn, so none of this is
+// load-bearing for the feature. That is exactly why it is here: the extension
+// runs unattended every five minutes against an authenticated account, and the
+// boundary should be enforced rather than inherited from CLI behaviour that can
+// change. --tools in particular is not dead weight; it is the guarantee that a
+// future CLI reaching the model still cannot act.
+const CLAUDE_ARGS = [
+    '--safe-mode',
+    '--no-session-persistence',
+    '--strict-mcp-config',
+    '--tools', '',
+    '-p', '/usage',
+];
+
+// A CLI predating these flags exits non-zero with an unknown-option error.
+// Retrying cannot fix that, and falling back to an unhardened command would
+// defeat the point, so it becomes a visible terminal state instead.
+const UNSUPPORTED_FLAG_RE = /unknown option|unrecognized option|unknown argument/i;
+
 // Resolved against CLAUDE_PATH_DIRS rather than GLib.find_program_in_path(),
 // which would search gnome-shell's own PATH instead of the one handed to the
 // subprocess.
@@ -271,6 +297,19 @@ class ClaudeIndicator extends PanelMenu.Button {
         cardsItem.add_child(cardsBox);
         this.menu.addMenuItem(cardsItem);
 
+        this._errorItem = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        const errorBox = new St.BoxLayout({style_class: 'claude-status-box', x_expand: true});
+        this._errorLabel = new St.Label({
+            text: '',
+            style_class: 'claude-error-label',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        errorBox.add_child(this._errorLabel);
+        this._errorItem.add_child(errorBox);
+        this._errorItem.visible = false;
+        this.menu.addMenuItem(this._errorItem);
+
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         this._statusItem = new PopupMenu.PopupBaseMenuItem();
@@ -343,7 +382,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             if (!claudeBin)
                 throw new Error(`claude binary not found in ${path}`);
 
-            proc = launcher.spawnv([claudeBin, '-p', '/usage']);
+            proc = launcher.spawnv([claudeBin, ...CLAUDE_ARGS]);
         } catch (e) {
             logError(e, 'claude-status: falha ao iniciar subprocess');
             this._refreshing = false;
@@ -380,6 +419,12 @@ class ClaudeIndicator extends PanelMenu.Button {
                 const exitStatus = source.get_exit_status();
 
                 if (exitStatus !== 0) {
+                    if (UNSUPPORTED_FLAG_RE.test(stderr ?? '')) {
+                        logError(new Error(
+                            'claude-status: CLI rejeitou as flags de isolamento; atualize o Claude Code'));
+                        this._setUnsupportedCli();
+                        return;
+                    }
                     logError(new Error(
                         `claude-status: comando saiu com codigo ${exitStatus}. stderr: ${(stderr ?? '').trim()}`));
                     this._scheduleRetry();
@@ -394,6 +439,7 @@ class ClaudeIndicator extends PanelMenu.Button {
                 }
 
                 this._retryCount = 0;
+                this._clearUnsupportedCli();
                 this._data = parsed;
                 this._lastUpdate = new Date();
 
@@ -406,6 +452,24 @@ class ClaudeIndicator extends PanelMenu.Button {
                 this._scheduleRetry();
             }
         });
+    }
+
+    // Terminal until the CLI is updated: no backoff, no fallback to an
+    // unhardened command. The periodic refresh keeps running, so the state
+    // clears by itself once a new enough binary is installed.
+    _setUnsupportedCli() {
+        this._retryCount = 0;
+        this._data = null;
+        this._lastUpdate = null;
+        this._label.set_text(panelLabel('--%', '--%'));
+        // TRANSLATORS: shown in the dropdown when the installed Claude Code CLI does
+        // not support the flags the extension uses to restrict it to reading usage
+        this._errorLabel.set_text(_('Claude CLI too old — update required'));
+        this._errorItem.visible = true;
+    }
+
+    _clearUnsupportedCli() {
+        this._errorItem.visible = false;
     }
 
     _scheduleRetry() {
