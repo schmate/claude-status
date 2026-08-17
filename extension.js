@@ -60,6 +60,39 @@ const CLAUDE_ARGS = [
 // defeat the point, so it becomes a visible terminal state instead.
 const UNSUPPORTED_FLAG_RE = /unknown option|unrecognized option|unknown argument/i;
 
+const STDERR_LOG_CHARS = 120;
+
+// `/usage` output carries request counts, session counts, top skills, top
+// subagents and top MCP servers. GNOME Shell logs to the journal, which is
+// persisted and readable beyond this process, so the content never goes there --
+// only its shape, which is what a parser bug actually needs. Set
+// CLAUDE_STATUS_DEBUG=1 in the gnome-shell environment to opt into the full
+// text while debugging.
+function debugEnabled() {
+    return GLib.getenv('CLAUDE_STATUS_DEBUG') === '1';
+}
+
+function describeShape(output) {
+    const text = output ?? '';
+    if (debugEnabled())
+        return text;
+    return `${text.length} chars, ${text ? text.split('\n').length : 0} lines (set CLAUDE_STATUS_DEBUG=1 for the text)`;
+}
+
+// stderr is where authentication diagnostics surface, so it is truncated to a
+// single short line rather than logged whole.
+function summarize(stderr) {
+    const text = (stderr ?? '').trim();
+    if (!text)
+        return '(no stderr)';
+    if (debugEnabled())
+        return text;
+    const firstLine = text.split('\n')[0];
+    return firstLine.length > STDERR_LOG_CHARS
+        ? `${firstLine.slice(0, STDERR_LOG_CHARS)}…`
+        : firstLine;
+}
+
 // Resolved against CLAUDE_PATH_DIRS rather than GLib.find_program_in_path(),
 // which would search gnome-shell's own PATH instead of the one handed to the
 // subprocess.
@@ -103,7 +136,7 @@ function colorForPercent(pct) {
 }
 
 function parseResetDate(text, now) {
-    // ex: "Jul 23, 7:40pm" ou "Jul 25, 12am"
+    // e.g. "Jul 23, 7:40pm" or "Jul 25, 12am"
     const m = text.match(/([A-Za-z]{3})\s+(\d{1,2}),?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
     if (!m)
         return null;
@@ -384,7 +417,7 @@ class ClaudeIndicator extends PanelMenu.Button {
 
             proc = launcher.spawnv([claudeBin, ...CLAUDE_ARGS]);
         } catch (e) {
-            logError(e, 'claude-status: falha ao iniciar subprocess');
+            logError(e, 'claude-status: failed to start the usage subprocess');
             this._refreshing = false;
             this._cancellable = null;
             this._scheduleRetry();
@@ -400,7 +433,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             GLib.PRIORITY_DEFAULT, SUBPROCESS_TIMEOUT_SECONDS, () => {
                 watchdogFired = true;
                 this._watchdogId = null;
-                logError(new Error(`claude-status: comando excedeu ${SUBPROCESS_TIMEOUT_SECONDS}s, cancelando`));
+                logError(new Error(`claude-status: command exceeded ${SUBPROCESS_TIMEOUT_SECONDS}s, cancelling`));
                 this._cancellable?.cancel();
                 return GLib.SOURCE_REMOVE;
             });
@@ -421,19 +454,19 @@ class ClaudeIndicator extends PanelMenu.Button {
                 if (exitStatus !== 0) {
                     if (UNSUPPORTED_FLAG_RE.test(stderr ?? '')) {
                         logError(new Error(
-                            'claude-status: CLI rejeitou as flags de isolamento; atualize o Claude Code'));
+                            'claude-status: CLI rejected the isolation flags; update Claude Code'));
                         this._setUnsupportedCli();
                         return;
                     }
                     logError(new Error(
-                        `claude-status: comando saiu com codigo ${exitStatus}. stderr: ${(stderr ?? '').trim()}`));
+                        `claude-status: command exited with code ${exitStatus}: ${summarize(stderr)}`));
                     this._scheduleRetry();
                     return;
                 }
 
                 const parsed = parseUsage(stdout ?? '');
                 if (!parsed) {
-                    logError(new Error(`claude-status: saida inesperada: ${stdout}`));
+                    logError(new Error(`claude-status: unexpected /usage output: ${describeShape(stdout)}`));
                     this._scheduleRetry();
                     return;
                 }
@@ -448,7 +481,7 @@ class ClaudeIndicator extends PanelMenu.Button {
                 this._weekCard.setData(parsed.week.pct, parsed.week.resetText);
                 this._tick();
             } catch (e) {
-                logError(e, 'claude-status: falha ao ler saida do comando');
+                logError(e, 'claude-status: failed to read the command output');
                 this._scheduleRetry();
             }
         });
@@ -515,7 +548,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             this._statusLabel.set_text(description);
         } catch (e) {
             if (!this._destroyed) {
-                logError(e, 'claude-status: falha ao consultar status.claude.com');
+                logError(e, 'claude-status: failed to query status.claude.com');
                 this._statusDot.set_style(`background-color: ${STATUS_COLORS.none};`);
                 this._statusLabel.set_text(_('Status unavailable'));
             }
