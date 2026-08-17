@@ -62,6 +62,31 @@ const UNSUPPORTED_FLAG_RE = /unknown option|unrecognized option|unknown argument
 
 const STDERR_LOG_CHARS = 120;
 
+// The status endpoint's own payload is a couple of KB. Anything far past that
+// is either not the response we expect or an attempt to make gnome-shell decode
+// and parse an unbounded body, so it is rejected before either happens.
+const MAX_STATUS_BYTES = 64 * 1024;
+const MAX_STATUS_TEXT_CHARS = 80;
+
+// The only remote-controlled string that reaches a label. St.Label renders text
+// rather than markup, so this is about keeping the panel readable: no control
+// characters, no line breaks, no unbounded length.
+function sanitizeStatusText(value) {
+    if (typeof value !== 'string')
+        return null;
+
+    const cleaned = value
+        .replace(/[\u0000-\u001F\u007F]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!cleaned)
+        return null;
+
+    return cleaned.length > MAX_STATUS_TEXT_CHARS
+        ? `${cleaned.slice(0, MAX_STATUS_TEXT_CHARS)}…`
+        : cleaned;
+}
+
 // `/usage` output carries request counts, session counts, top skills, top
 // subagents and top MCP servers. GNOME Shell logs to the journal, which is
 // persisted and readable beyond this process, so the content never goes there --
@@ -536,11 +561,24 @@ class ClaudeIndicator extends PanelMenu.Button {
             if (message.get_status() !== Soup.Status.OK)
                 throw new Error(`HTTP ${message.get_status()}`);
 
+            if (bytes.get_size() > MAX_STATUS_BYTES)
+                throw new Error(`status payload too large: ${bytes.get_size()} bytes`);
+
             const text = new TextDecoder('utf-8').decode(bytes.get_data());
             const json = JSON.parse(text);
-            const indicator = json.status?.indicator ?? 'none';
-            const description = statusIndicatorLabel(indicator) ?? json.status?.description ?? _('Unknown');
-            const color = STATUS_COLORS[indicator] ?? STATUS_COLORS.none;
+
+            // The indicator is remote-controlled and used as a property key, so
+            // membership is tested with Object.hasOwn rather than a `??`
+            // fallback: keys like "constructor" or "__proto__" resolve up the
+            // prototype chain to something truthy, which `??` happily accepts.
+            // The indicator itself is not coerced to a known value, so an
+            // unrecognised one still falls through to the remote description
+            // rather than being reported as operational.
+            const reported = json.status?.indicator;
+            const known = Object.hasOwn(STATUS_COLORS, reported);
+            const description = (known ? statusIndicatorLabel(reported) : null) ??
+                sanitizeStatusText(json.status?.description) ?? _('Unknown');
+            const color = known ? STATUS_COLORS[reported] : STATUS_COLORS.none;
 
             if (this._destroyed)
                 return;
